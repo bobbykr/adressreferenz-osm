@@ -1,0 +1,118 @@
+# Monatlicher OSM-Adressauszug für die Adressprüfung von VorgangsHub.
+# Der Server holt die Datei am 5. um 04:23 Uhr (Europe/Berlin) über
+# releases/latest/download/osm-adressen.csv.gz ab – deshalb läuft der Auszug am 2.
+#
+# Probelauf mit kleiner Region (wird als Vorabversion veröffentlicht und nie „latest“):
+#   gh workflow run auszug.yml -f region=europe/germany/nordrhein-westfalen/duesseldorf-regbez
+name: OSM-Adressauszug
+
+on:
+  schedule:
+    - cron: '17 2 2 * *'
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Geofabrik-Region (Pfad ohne -latest.osm.pbf)'
+        required: true
+        default: 'europe/germany'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auszug
+  cancel-in-progress: false
+
+jobs:
+  auszug:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      REGION: ${{ inputs.region || 'europe/germany' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Werkzeuge
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q osmium-tool time
+          python3 -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt
+          osmium --version | head -1
+          df -h . | tail -1
+          free -g | head -2
+
+      - name: Download (Geofabrik)
+        run: |
+          quelle="https://download.geofabrik.de/${REGION}-latest.osm.pbf"
+          curl -fsSL --retry 3 -A "adressreferenz-osm (https://github.com/${GITHUB_REPOSITORY})" -o region.osm.pbf "$quelle"
+          curl -fsSL --retry 3 -o region.osm.pbf.md5 "${quelle}.md5"
+          echo "$(cut -d' ' -f1 region.osm.pbf.md5)  region.osm.pbf" | md5sum -c -
+          osmium fileinfo -g header.option.osmosis_replication_timestamp region.osm.pbf > osm-stand.txt || echo unbekannt > osm-stand.txt
+          ls -la region.osm.pbf
+          echo "OSM-Stand: $(cat osm-stand.txt)"
+
+      - name: Filtern (osmium)
+        run: |
+          # Adressen, alle Wege (ohne access-Filter) und PLZ-Gebiete samt referenzierter Knoten.
+          osmium tags-filter region.osm.pbf nwr/addr:housenumber w/highway r/boundary=postal_code -o adressen.osm.pbf
+          osmium tags-filter adressen.osm.pbf r/boundary=postal_code -o plz.osm.pbf
+          rm region.osm.pbf
+          ls -la *.osm.pbf
+
+      - name: Auszug
+        run: |
+          args=(--plz plz.osm.pbf --adressen adressen.osm.pbf --ziel ausgabe)
+          case "$REGION" in
+            europe/germany)
+              # Untergrenzen gegen kaputte Läufe: ein unvollständiger Auszug wird nie „latest“.
+              args+=(--min-plz 7500 --min-strassen 600000 --min-hausnummern 15000000 --pruefe 'Winkelstraße|42551|10') ;;
+            */duesseldorf-regbez|*/nordrhein-westfalen)
+              args+=(--pruefe 'Winkelstraße|42551|10') ;;
+          esac
+          /usr/bin/time -v .venv/bin/python auszug.py "${args[@]}" 2> >(tee zeit.txt >&2)
+          grep -E 'Maximum resident|Elapsed' zeit.txt || true
+
+      - name: Veröffentlichen
+        run: |
+          datum=$(date -u +%Y-%m-%d)
+          if [ "$REGION" = "europe/germany" ]; then
+            tag="stand-${datum}-${GITHUB_RUN_NUMBER}"; art=(--latest)
+          else
+            tag="probe-${datum}-${GITHUB_RUN_NUMBER}"; art=(--prerelease)
+          fi
+          lauf="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          jq --arg region "$REGION" --arg osmStand "$(cat osm-stand.txt)" --arg lauf "$lauf" --arg tag "$tag" \
+            '. + {region: $region, osmStand: $osmStand, tag: $tag, lauf: $lauf}' ausgabe/stand.json > stand.json
+          {
+            echo "OSM-Adressauszug für **${REGION}**, OSM-Stand $(cat osm-stand.txt)."
+            echo
+            echo '```json'
+            cat stand.json
+            echo '```'
+            echo
+            echo 'Enthält Daten von OpenStreetMap – © OpenStreetMap-Mitwirkende, verfügbar unter der Open Database License (ODbL) 1.0.'
+          } > notizen.md
+          gh release create "$tag" ausgabe/osm-adressen.csv.gz stand.json --title "$tag" --notes-file notizen.md "${art[@]}"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Stand festhalten
+        if: env.REGION == 'europe/germany'
+        run: |
+          # Der Commit hält den Zeitplan wach: GitHub schaltet geplante Läufe in
+          # öffentlichen Repos nach 60 Tagen ohne Aktivität ab.
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add stand.json
+          git commit -m "Stand ${TAG}"
+          git push
+
+      - name: Alte Releases aufräumen
+        run: |
+          # Je Art die drei neuesten behalten.
+          for praefix in stand- probe-; do
+            gh release list --limit 100 --json tagName,createdAt \
+              -q "[.[] | select(.tagName | startswith(\"${praefix}\"))] | sort_by(.createdAt) | reverse | .[3:] | .[].tagName" |
+              while read -r alt; do gh release delete "$alt" --yes --cleanup-tag; done
+          done

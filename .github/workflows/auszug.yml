@@ -26,9 +26,9 @@ concurrency:
 jobs:
   auszug:
     runs-on: ubuntu-24.04
-    # Der Download vom Geofabrik-Spiegel (GWDG) läuft im Runner mit ≈ 0,8 MB/s
-    # (Probelauf 07.10.2026) – für 4,85 GB rund 100 Minuten. GitHub erlaubt 360.
-    timeout-minutes: 330
+    # Deutschland kam am 07.10.2026 in < 40 s (GWDG-Spiegel), Teilregionen nur mit
+    # ≈ 0,8 MB/s direkt von Geofabrik – Puffer für einen langsamen Tag.
+    timeout-minutes: 180
     env:
       REGION: ${{ inputs.region || 'europe/germany' }}
       GH_TOKEN: ${{ github.token }}
@@ -53,8 +53,13 @@ jobs:
             curl -fsSL -C - -A "adressreferenz-osm (https://github.com/${GITHUB_REPOSITORY})" -o region.osm.pbf "$quelle" && break
             echo "Download abgebrochen (Versuch $versuch), setze fort …"; sleep 30
           done
-          curl -fsSL --retry 3 -o region.osm.pbf.md5 "${quelle}.md5"
-          echo "$(cut -d' ' -f1 region.osm.pbf.md5)  region.osm.pbf" | md5sum -c -
+          # Für Deutschland gibt es keine -latest.md5 (nur Monatsstände); dann schützen
+          # die zlib-Prüfsummen der PBF-Blöcke – osmium bricht bei kaputter Datei ab.
+          if curl -fsSL --retry 3 -o region.osm.pbf.md5 "${quelle}.md5"; then
+            echo "$(cut -d' ' -f1 region.osm.pbf.md5)  region.osm.pbf" | md5sum -c -
+          else
+            echo "Keine MD5-Datei für ${REGION}, Prüfung über osmium"
+          fi
           osmium fileinfo -g header.option.osmosis_replication_timestamp region.osm.pbf > osm-stand.txt || echo unbekannt > osm-stand.txt
           ls -la region.osm.pbf
           echo "OSM-Stand: $(cat osm-stand.txt)"

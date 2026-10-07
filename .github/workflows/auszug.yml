@@ -78,7 +78,8 @@ jobs:
           case "$REGION" in
             europe/germany)
               # Untergrenzen gegen kaputte Läufe: ein unvollständiger Auszug wird nie „latest“.
-              args+=(--min-plz 7500 --min-strassen 600000 --min-hausnummern 15000000 --pruefe 'Winkelstraße|42551|10') ;;
+              # Erster Lauf 07.10.2026: 8.413 PLZ, 1.355.918 Straßen je PLZ, 20.037.792 Hausnummern.
+              args+=(--min-plz 8000 --min-strassen 1250000 --min-hausnummern 18000000 --pruefe 'Winkelstraße|42551|10') ;;
             */duesseldorf-regbez|*/nordrhein-westfalen)
               args+=(--pruefe 'Winkelstraße|42551|10') ;;
           esac

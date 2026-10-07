@@ -26,7 +26,9 @@ concurrency:
 jobs:
   auszug:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    # Der Download vom Geofabrik-Spiegel (GWDG) läuft im Runner mit ≈ 0,8 MB/s
+    # (Probelauf 07.10.2026) – für 4,85 GB rund 100 Minuten. GitHub erlaubt 360.
+    timeout-minutes: 330
     env:
       REGION: ${{ inputs.region || 'europe/germany' }}
       GH_TOKEN: ${{ github.token }}
@@ -46,7 +48,11 @@ jobs:
       - name: Download (Geofabrik)
         run: |
           quelle="https://download.geofabrik.de/${REGION}-latest.osm.pbf"
-          curl -fsSL --retry 3 -A "adressreferenz-osm (https://github.com/${GITHUB_REPOSITORY})" -o region.osm.pbf "$quelle"
+          # Abgebrochene Übertragungen setzen dort fort, wo sie standen (-C -).
+          for versuch in 1 2 3 4 5; do
+            curl -fsSL -C - -A "adressreferenz-osm (https://github.com/${GITHUB_REPOSITORY})" -o region.osm.pbf "$quelle" && break
+            echo "Download abgebrochen (Versuch $versuch), setze fort …"; sleep 30
+          done
           curl -fsSL --retry 3 -o region.osm.pbf.md5 "${quelle}.md5"
           echo "$(cut -d' ' -f1 region.osm.pbf.md5)  region.osm.pbf" | md5sum -c -
           osmium fileinfo -g header.option.osmosis_replication_timestamp region.osm.pbf > osm-stand.txt || echo unbekannt > osm-stand.txt

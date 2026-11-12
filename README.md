@@ -2,8 +2,9 @@
 
 Monatlicher Auszug aller Straßen und Hausnummern Deutschlands aus OpenStreetMap
 für die Adressprüfung von VorgangsHub. Die rechenintensive Arbeit
-(4,85-GB-Download, Filtern, PLZ-Zuordnung über die Lage) läuft hier im
-GitHub-Runner. Der Server lädt nur noch die fertige Tabelle.
+(4,85-GB-Download, Filtern, PLZ-Zuordnung über die Lage) läuft seit dem
+12.11.2026 wöchentlich auf unserem Bau-Server, nicht mehr in GitHub Actions.
+Der Server lädt nur noch die fertige Tabelle.
 
 ## Ausgabe
 
@@ -36,18 +37,31 @@ Eine Zeile je Straße, PLZ und Ort. Dazu kommt `stand.json` mit Kennzahlen
 
 ## Ablauf
 
-`.github/workflows/auszug.yml`: am 2. jedes Monats; der Server holt am 5. ab.
-Probelauf mit kleiner Region (Vorabversion, nie `latest`):
+Sonntags ab 02:30 Uhr baut die Prüfstraße des CRM den Auszug
+(`scripts/pruefstrasse/osm-auszug.mjs`, Nachtschritt `osm-auszug`): Sie klont
+dieses Repo, startet `bau-auszug.sh` per `bau` auf dem Bau-Server (Docker-Abbild
+aus `Dockerfile` mit osmium und Python, darin `auszug.sh`) und veröffentlicht
+das Ergebnis als Release `stand-JJJJ-MM-TT-HHMM`. Der CRM-Server holt es
+sonntags um 04:23 Uhr ab. Fällt ein Sonntag aus, baut jede folgende Nacht nach;
+ist der letzte Auszug älter als 9 Tage, wird der Nachtschritt rot.
+
+Von Hand (auf einer Devbox mit `bau` und `gh`, im CRM-Checkout):
 
 ```
-gh workflow run auszug.yml -f region=europe/germany/nordrhein-westfalen/duesseldorf-regbez
+node scripts/pruefstrasse/osm-auszug.mjs --jetzt                         # Deutschland, wird „latest“
+node scripts/pruefstrasse/osm-auszug.mjs --probe europe/germany/bremen   # Vorabversion, nie „latest“
 ```
 
-Lokal (Python ≥ 3.10, `pip install -r requirements.txt`):
+Nur bauen, ohne Veröffentlichen: `BAU_ART=docker bau bash bau-auszug.sh europe/germany/bremen`
+(Ergebnis als base64-tar auf stdout zwischen `@@osm:anfang@@` und `@@osm:ende@@`).
+Ganz lokal mit osmium-tool und Python ≥ 3.10 (`pip install -r requirements.txt`):
 
 ```
-python auszug.py --plz region.osm.pbf --adressen region.osm.pbf --ziel ausgabe --pruefe "Winkelstraße|42551|10"
+mkdir arbeit && ./auszug.sh europe/germany/bremen arbeit
 ```
+
+`.github/workflows/auszug.yml` ist der frühere Weg über GitHub Actions; Actions
+sind für dieses Repo abgeschaltet.
 
 ## Lizenz
 
